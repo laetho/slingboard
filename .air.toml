@@ -1,0 +1,11 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "templ generate && go build -o sling ."
+  bin = "./sling"
+  include_ext = ["go", "templ", "yaml"]
+
+[log]
+  time = true
+

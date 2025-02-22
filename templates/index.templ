@@ -1,0 +1,50 @@
+package templates 
+
+templ Index() {
+  <html>
+    <head>
+      <title>Sling Board</title>
+      <script src="https://unpkg.com/htmx.org@2.0.4" crossorigin="anonymous"></script>
+      <script src="https://unpkg.com/htmx-ext-ws@2.0.2" crossorigin="anonymous"></script>
+      <style>
+        .sling-message {
+          padding: 10px;
+          border-bottom: 1px solid #ddd;
+        }
+      </style>
+    </head>
+    <body>
+    <h1>Sling Board</h1>
+    
+     <div id="slings" 
+         hx-ext="ws"
+         ws-connect="/slings"
+         ws-receive>
+    </div>
+
+    <script>
+      document.addEventListener("htmx:wsMessage", function(evt) {
+        console.log("HTMX WebSocket Message Received:", evt.detail.message);
+      });
+
+        document.addEventListener("htmx:wsMessage", function(evt) {
+            let slings = document.getElementById("slings");
+            if (!slings) return;
+
+            // Ensure the message is properly extracted
+            let message = evt.detail.message; 
+
+            // Safely insert the new message
+            slings.insertAdjacentHTML("beforeend", message);  
+
+            // Auto-scroll to the latest message
+            slings.scrollTop = slings.scrollHeight; 
+        });
+        document.addEventListener("htmx:wsMessage", function(evt) {
+    console.log("Received WS Message:", evt.detail.message);
+});
+
+    </script>
+    </body>
+  </html>
+}

@@ -1,0 +1,29 @@
+version: "3"
+
+tasks:
+  build:
+    desc: "Build the project"
+    cmds:
+      - templ generate
+      - go build -o sling .
+
+  run:
+    desc: "Run Sling Board"
+    cmds:
+      - go-task build
+      - ./sling serve
+
+  run-nats:
+    desc: "Start a local NATS server."
+    cmds:
+      - ./scripts/nats.sh
+  dev:
+    desc: "Run development mode with live reloading"
+    cmds:
+      - air
+
+  clean:
+    desc: "Clean up build files"
+    cmds:
+      - rm -rf sling tmp
+
