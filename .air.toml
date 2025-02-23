@@ -5,7 +5,12 @@ tmp_dir = "tmp"
   cmd = "templ generate && go build -o sling ."
   bin = "./sling"
   include_ext = ["go", "templ", "yaml"]
+  exclude_regex = [ "_test.go", ".", "_templ.go"]
 
 [log]
   time = true
 
+[proxy]
+  enabled = true
+  proxy_port = 3001
+  app_port = 8080 

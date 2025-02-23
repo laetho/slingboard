@@ -1,7 +1,8 @@
 package server
 
 import (
-	"fmt"
+	"bytes"
+	"context"
 	"log"
 	"net/http"
 	"os"
@@ -20,13 +21,14 @@ func slingWebSocketHandler(nc *nats.Conn) http.Handler {
 		}()
 
 		// Subscribe to NATS topic
-		sub, err := nc.Subscribe("slingboard.>", func(msg *nats.Msg) {
-			log.Println("Received message from NATS:", string(msg.Data))
-
-			htmlMessage := fmt.Sprintf(`<div class="sling-message">%s</div>`, msg.Data)
-			fmt.Println(htmlMessage)
-			// Send NATS message to WebSocket client
-			if err := websocket.Message.Send(ws, htmlMessage); err != nil {
+		sub, err := nc.Subscribe("slingboard.global", func(msg *nats.Msg) {
+			// todo this should be a template as well
+			var buf bytes.Buffer
+			component := templates.Sling(string(msg.Data))
+			if err := component.Render(context.Background(), &buf); err != nil {
+				log.Printf("Error rendering template: %v", err)
+			}
+			if err := websocket.Message.Send(ws, buf.String()); err != nil {
 				log.Println("Error sending message to WebSocket:", err)
 			}
 		})
@@ -47,7 +49,7 @@ func slingWebSocketHandler(nc *nats.Conn) http.Handler {
 	})
 }
 
-func serveTemplate(w http.ResponseWriter, r *http.Request) {
+func serveIndexTemplate(w http.ResponseWriter, r *http.Request) {
 	component := templates.Index()
 	w.Header().Set("Content-Type", "text/html")
 	if err := component.Render(r.Context(), w); err != nil {
@@ -68,7 +70,7 @@ func Start() {
 	}
 	defer nc.Close()
 
-	http.HandleFunc("/", serveTemplate)
+	http.HandleFunc("/", serveIndexTemplate)
 	http.Handle("/slings", slingWebSocketHandler(nc))
 	log.Println("Sling Board server started on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
