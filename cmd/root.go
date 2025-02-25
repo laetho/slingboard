@@ -12,6 +12,14 @@ var rootCmd = &cobra.Command{
 	Use:   "sling",
 	Short: "Sling Board CLI",
 	Long:  `Sling Board is a real-time messaging board built on NATS.`,
+	Args:  cobra.ArbitraryArgs, // Allow any number of arguments
+	Run: func(cmd *cobra.Command, args []string) {
+		if len(args) > 0 {
+			slingMessage.Run(cmd, args)
+		} else {
+			_ = cmd.Help()
+		}
+	},
 }
 
 func Execute() {

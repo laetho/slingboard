@@ -3,7 +3,7 @@ tmp_dir = "tmp"
 
 [build]
   cmd = "templ generate && go build -o sling ."
-  bin = "./sling"
+  bin = "./sling serve"
   include_ext = ["go", "templ", "yaml"]
   exclude_regex = [ "_test.go", ".", "_templ.go"]
 

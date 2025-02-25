@@ -25,7 +25,7 @@ var slingFile = &cobra.Command{
 
 		f, err := os.Open(filename)
 		if err != nil {
-			log.Fatal(err)
+			log.Fatalf("Unable to open file %v", err)
 		}
 		defer f.Close()
 
