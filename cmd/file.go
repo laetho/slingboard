@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/h2non/filetype"
+	sc "github.com/laetho/slingboard/internal/slingclient"
 	"github.com/spf13/cobra"
 )
 
@@ -17,29 +17,14 @@ var slingFile = &cobra.Command{
 	Short: "Sling a file",
 	Long:  "Sling a file to the board, slingboard will attempt to detect the filetype and handle it properly.",
 	Run: func(cmd *cobra.Command, args []string) {
+		if len(args) == 0 {
+			log.Fatalf("No file provided")
+		}
 		filename := args[0]
 
-		if len(filename) == 0 {
-			log.Fatalf("No filename provided")
-		}
-
-		f, err := os.Open(filename)
-		if err != nil {
-			log.Fatalf("Unable to open file %v", err)
-		}
-		defer f.Close()
-
-		buf := make([]byte, 261) // 261 bytes is enough for detection
-		_, err = f.Read(buf)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		kind, _ := filetype.Match(buf)
-		if kind == filetype.Unknown {
-			fmt.Println("Unknown file type")
-		} else {
-			fmt.Printf("Detected file type: %s, MIME: %s\n", kind.Extension, kind.MIME.Value)
+		client := sc.NewClient()
+		if err := client.SlingFile("slingboard.global", filename); err != nil {
+			log.Fatalf("Unable to send message: %v", err)
 		}
 	},
 }

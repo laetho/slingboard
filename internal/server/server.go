@@ -3,10 +3,14 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
+	"github.com/laetho/slingboard/internal/slingmessage"
 	"github.com/laetho/slingboard/templates"
 	"github.com/nats-io/nats.go"
 	"golang.org/x/net/websocket"
@@ -22,12 +26,33 @@ func slingWebSocketHandler(nc *nats.Conn) http.Handler {
 
 		// Subscribe to NATS topic
 		sub, err := nc.Subscribe("slingboard.global", func(msg *nats.Msg) {
-			// todo this should be a template as well
-			var buf bytes.Buffer
-			component := templates.Sling(string(msg.Data))
-			if err := component.Render(context.Background(), &buf); err != nil {
-				log.Printf("Error rendering template: %v", err)
+			var buf bytes.Buffer // templ output buffer
+			var sling slingmessage.SlingMessage
+
+			err := json.Unmarshal(msg.Data, &sling)
+			if err != nil {
+				log.Printf("Error unmarshalling message: %v", err)
+				return
 			}
+
+			switch {
+			case strings.HasPrefix(sling.MimeType, "image/"):
+				component := templates.SlingImage(
+					fmt.Sprintf(
+						"data:%s;base64,%s", sling.MimeType, sling.Content),
+				)
+				if err := component.Render(context.Background(), &buf); err != nil {
+					log.Printf("Error rendering template: %v", err)
+				}
+
+			case strings.HasPrefix(sling.MimeType, "text/"):
+				component := templates.Sling(string(sling.Content))
+				if err := component.Render(context.Background(), &buf); err != nil {
+					log.Printf("Error rendering template: %v", err)
+				}
+
+			}
+
 			if err := websocket.Message.Send(ws, buf.String()); err != nil {
 				log.Println("Error sending message to WebSocket:", err)
 			}

@@ -10,8 +10,14 @@ templ Sling(message string) {
   </div>
 }
 
-templ SlingImage() {
-  <div></div>
+templ SlingImage(imagecontent string) {
+  <div id="slings"
+    hx-swap-oob="afterbegin"> 
+    <div id="sling"
+      class="sling text-white"> 
+      <img src={ imagecontent } class="w-[80vw] h-[80vh] v-auto h-auto" />
+    </div>
+  </div>
 }
 
 templ SlingPDF() {

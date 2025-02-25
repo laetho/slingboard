@@ -4,7 +4,6 @@ go 1.23.6
 
 require (
 	github.com/a-h/templ v0.3.833
-	github.com/h2non/filetype v1.1.3
 	github.com/nats-io/nats.go v1.39.1
 	github.com/spf13/cobra v1.9.1
 	github.com/spf13/viper v1.19.0

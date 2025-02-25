@@ -18,7 +18,7 @@ var slingMessage = &cobra.Command{
 		}
 		message := strings.Join(args, " ")
 		client := sc.NewClient()
-		if err := client.SendStringMessage("slingboard.global", message); err != nil {
+		if err := client.SendStringMessage("slingboard.global", []byte(message)); err != nil {
 			log.Fatalf("Unable to send message: %v", err)
 		}
 	},
