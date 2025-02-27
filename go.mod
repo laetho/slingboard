@@ -4,6 +4,7 @@ go 1.23.6
 
 require (
 	github.com/a-h/templ v0.3.833
+	github.com/alecthomas/chroma v0.10.0
 	github.com/nats-io/nats.go v1.39.1
 	github.com/spf13/cobra v1.9.1
 	github.com/spf13/viper v1.19.0
@@ -11,6 +12,7 @@ require (
 )
 
 require (
+	github.com/dlclark/regexp2 v1.11.4 // indirect
 	github.com/fsnotify/fsnotify v1.8.0 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect

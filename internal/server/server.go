@@ -3,14 +3,16 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 
+	"github.com/alecthomas/chroma/quick"
 	"github.com/laetho/slingboard/internal/slingmessage"
+	"github.com/laetho/slingboard/internal/slingnats"
 	"github.com/laetho/slingboard/templates"
 	"github.com/nats-io/nats.go"
 	"golang.org/x/net/websocket"
@@ -39,8 +41,26 @@ func slingWebSocketHandler(nc *nats.Conn) http.Handler {
 			case strings.HasPrefix(sling.MimeType, "image/"):
 				component := templates.SlingImage(
 					fmt.Sprintf(
-						"data:%s;base64,%s", sling.MimeType, sling.Content),
+						"data:%s;base64,%s", sling.MimeType, base64.RawStdEncoding.EncodeToString(sling.Content)),
 				)
+				if err := component.Render(context.Background(), &buf); err != nil {
+					log.Printf("Error rendering template: %v", err)
+				}
+
+			case strings.HasPrefix(sling.MimeType, "text/x-go"):
+				base64.StdEncoding.Decode(sling.Content, sling.Content)
+				var buffer bytes.Buffer
+				err := quick.Highlight(&buffer, string(sling.Content), "go", "html", "monokai")
+				if err != nil {
+					log.Printf("Error highlighting Go code: %v", err)
+					return
+				}
+				component := templates.SlingCode(buffer.String())
+				if err := component.Render(context.Background(), &buf); err != nil {
+					log.Printf("Error rendering template: %v", err)
+				}
+			case strings.HasPrefix(sling.MimeType, "text/x-uri"):
+				component := templates.SlingURL(string(sling.Content))
 				if err := component.Render(context.Background(), &buf); err != nil {
 					log.Printf("Error rendering template: %v", err)
 				}
@@ -84,12 +104,7 @@ func serveIndexTemplate(w http.ResponseWriter, r *http.Request) {
 }
 
 func Start() {
-	natsURL := os.Getenv("NATS_URL")
-	if natsURL == "" {
-		natsURL = nats.DefaultURL
-	}
-
-	nc, err := nats.Connect(natsURL)
+	nc, err := slingnats.ConnectNATS()
 	if err != nil {
 		log.Fatalf("Error connecting to NATS: %v", err)
 	}

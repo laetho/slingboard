@@ -8,6 +8,7 @@
 *.so
 *.dylib
 local/
+*.creds
 
 # Test binary, built with `go test -c`
 *.test

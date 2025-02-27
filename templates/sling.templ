@@ -15,7 +15,7 @@ templ SlingImage(imagecontent string) {
     hx-swap-oob="afterbegin"> 
     <div id="sling"
       class="sling text-white"> 
-      <img src={ imagecontent } class="w-[80vw] h-[80vh] v-auto h-auto" />
+      <img src={ imagecontent } class="w-[80vw] h-[80vh] w-auto h-auto" />
     </div>
   </div>
 }
@@ -24,14 +24,30 @@ templ SlingPDF() {
   <div></div>
 }
 
-templ SlingURL() {
-  <div></div>
+templ SlingURL( url string ) {
+  <div id="slings"
+    hx-swap-oob="afterbegin"> 
+    <div id="sling"
+      class="sling text-white"> 
+      <iframe src={ url }
+        class="w-[80vw] h-[80vh] border-none" 
+        sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-presentation allow-top-navigation allow-top-navigation-by-user-activation">
+      </iframe>
+    </div>
+  </div>
 }
 
 templ SlingMarkdowns() {
   <div></div>
 }
 
-templ SlingCode() {
-  <div></div>
+templ SlingCode(code string) {
+  <div id="slings"
+    hx-swap-oob="afterbegin"> 
+    <div id="sling"
+      class="sling text-white"> 
+      @templ.Raw(code)
+    </div>
+  </div>
 }
+

@@ -1,7 +1,6 @@
 package slingclient
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/laetho/slingboard/internal/slingmessage"
+	"github.com/laetho/slingboard/internal/slingnats"
 	"github.com/nats-io/nats.go"
 )
 
@@ -19,7 +19,7 @@ type Client struct {
 }
 
 func NewClient() *Client {
-	nc, err := ConnectNATS()
+	nc, err := slingnats.ConnectNATS()
 	if err != nil {
 		log.Fatalf("Error connecting to NATS: %v", err)
 	}
@@ -33,6 +33,30 @@ func (c *Client) SendStringMessage(subject string, message []byte) error {
 	sling := &slingmessage.SlingMessage{}
 	sling.MimeType = "text/plain"
 	sling.Content = message
+
+	jsonData, err := json.Marshal(sling)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
+	}
+
+	err = c.nc.Publish(subject, jsonData)
+	if err != nil {
+		return err
+	}
+
+	// Ensure message is actually sent
+	err = c.nc.Flush()
+	if err != nil {
+		return fmt.Errorf("failed to flush message: %w", err)
+	}
+
+	return nil
+}
+
+func (c *Client) SlingURL(subject string, url string) error {
+	sling := &slingmessage.SlingMessage{}
+	sling.MimeType = "text/x-uri"
+	sling.Content = []byte(url)
 
 	jsonData, err := json.Marshal(sling)
 	if err != nil {
@@ -76,7 +100,7 @@ func (c *Client) SlingFile(subject string, file string) error {
 	fmt.Println("Final MIME Type:", finalMime)
 
 	sling.MimeType = finalMime
-	sling.Content = []byte(base64.StdEncoding.EncodeToString(data))
+	sling.Content = []byte(data)
 
 	jsonData, err := json.Marshal(sling)
 	if err != nil {
