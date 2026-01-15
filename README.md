@@ -6,6 +6,17 @@ SlingBoard is a lightweight digital bulletin board solution where you can "sling
 
 SlingBoard runs as a NATS-only responder service. The `h8sd` daemon is deployed separately to bridge HTTP/WebSocket traffic into NATS. SlingBoard listens on NATS subjects derived from the HTTP request mapping conventions and publishes user content to `slingboard.{board}`. Each board is backed by a JetStream stream (`sb_{board}`) using interest retention (messages expire after 24h). The frontend uses Datastar to apply server-rendered HTML fragments received over WebSockets.
 
+```mermaid
+graph TD
+    CLI[CLI] -->|HTTP /api/commands| H8SD[h8sd]
+    Browser[Browser] -->|HTTP /, /board/{name}/| H8SD
+    Browser -->|WebSocket /board/{name}/| H8SD
+    H8SD -->|NATS req/reply| SlingBoard[SlingBoard service]
+    SlingBoard -->|JetStream publish| Stream[JetStream sb_{board}]
+    Stream -->|Pull consumer| SlingBoard
+    SlingBoard -->|HTML fragments| H8SD
+```
+
 ## Local development
 
 The all-in-one compose setup runs NATS with JetStream enabled, SlingBoard, and h8sd (Go 1.25 toolchain):
@@ -48,6 +59,12 @@ Board management commands:
 ```
 ./sling --api-url http://localhost:8080 board list
 ./sling --api-url http://localhost:8080 board create team-a
+```
+
+Serve with an explicit NATS URL:
+
+```
+./sling serve --nats-url nats://localhost:4222
 ```
 
 ## Tests
