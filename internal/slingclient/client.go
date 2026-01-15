@@ -21,6 +21,11 @@ type Client struct {
 	httpClient *http.Client
 }
 
+type BoardList struct {
+	Status string   `json:"status"`
+	Boards []string `json:"boards"`
+}
+
 func NewClient(baseURL string) *Client {
 	if baseURL == "" {
 		baseURL = "http://localhost:8080"
@@ -68,53 +73,76 @@ func (c *Client) SendFile(board string, file string) error {
 }
 
 func (c *Client) sendCommand(command commands.CommandRequest) error {
+	_, err := c.sendCommandResponse(command)
+	return err
+}
+
+func (c *Client) sendCommandResponse(command commands.CommandRequest) (commands.CommandResponse, error) {
 	payload, err := json.Marshal(command)
 	if err != nil {
-		return fmt.Errorf("failed to marshal command: %w", err)
+		return commands.CommandResponse{}, fmt.Errorf("failed to marshal command: %w", err)
 	}
 
 	request, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/commands", bytes.NewReader(payload))
 	if err != nil {
-		return fmt.Errorf("failed to build request: %w", err)
+		return commands.CommandResponse{}, fmt.Errorf("failed to build request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return fmt.Errorf("failed to send command: %w", err)
+		return commands.CommandResponse{}, fmt.Errorf("failed to send command: %w", err)
 	}
 	defer response.Body.Close()
 
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
+		return commands.CommandResponse{}, fmt.Errorf("failed to read response: %w", err)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("command failed: %s", strings.TrimSpace(string(body)))
+		return commands.CommandResponse{}, fmt.Errorf("command failed: %s", strings.TrimSpace(string(body)))
 	}
 
 	if len(body) == 0 {
-		return nil
+		return commands.CommandResponse{}, nil
 	}
 
 	var commandResponse commands.CommandResponse
 	if err := json.Unmarshal(body, &commandResponse); err != nil {
-		return fmt.Errorf("failed to decode response: %w", err)
+		return commands.CommandResponse{}, fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	if strings.EqualFold(commandResponse.Status, "error") {
-		return fmt.Errorf("command error: %s", commandResponse.Message)
+		return commands.CommandResponse{}, fmt.Errorf("command error: %s", commandResponse.Message)
 	}
 
-	return nil
+	return commandResponse, nil
+}
+
+func (c *Client) BoardList() (BoardList, error) {
+	response, err := c.sendCommandResponse(commands.CommandRequest{Type: commands.CommandBoardList})
+	if err != nil {
+		return BoardList{}, err
+	}
+
+	return BoardList{Status: response.Status, Boards: response.Boards}, nil
+}
+
+func (c *Client) BoardCreate(board string) (commands.CommandResponse, error) {
+	return c.sendCommandResponse(commands.CommandRequest{Type: commands.CommandBoardCreate, Board: board})
 }
 
 func detectMimeType(filename string, data []byte) string {
+	ext := strings.ToLower(filepath.Ext(filename))
+	if ext == ".md" || ext == ".markdown" {
+		return "text/markdown"
+	}
+
 	peekSize := min(len(data), 512)
 	mimeType := http.DetectContentType(data[:peekSize])
 	if isTextMime(mimeType) {
-		if ext := filepath.Ext(filename); ext != "" {
+		if ext != "" {
 			if fromExt := mime.TypeByExtension(ext); fromExt != "" {
 				return fromExt
 			}

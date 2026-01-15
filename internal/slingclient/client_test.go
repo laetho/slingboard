@@ -135,6 +135,9 @@ func TestSendTextUsesH8SProxy(t *testing.T) {
 	if got.Content != "hello" {
 		t.Fatalf("expected content hello, got %q", got.Content)
 	}
+	if got.MimeType != "" || got.Filename != "" {
+		t.Fatalf("expected text request to omit file metadata")
+	}
 }
 
 func TestSendURLUsesH8SProxy(t *testing.T) {
@@ -199,6 +202,82 @@ func TestSendFileUsesH8SProxy(t *testing.T) {
 	}
 	if string(decoded) != "hello" {
 		t.Fatalf("expected decoded content hello, got %q", string(decoded))
+	}
+}
+
+func TestBoardListUsesJSON(t *testing.T) {
+	harness := startHarness(t)
+
+	_, err := harness.natsConn.Subscribe("h8s.http.POST.localhost.api.commands", func(msg *nats.Msg) {
+		var req commands.CommandRequest
+		if err := json.Unmarshal(msg.Data, &req); err != nil {
+			return
+		}
+		if req.Type != commands.CommandBoardList {
+			return
+		}
+		resp, _ := json.Marshal(commands.CommandResponse{Status: "ok", Boards: []string{"alpha", "beta"}})
+		msg.RespondMsg(&nats.Msg{
+			Header: nats.Header{
+				"Status-Code":    []string{"200"},
+				"Content-Type":   []string{"application/json"},
+				"Content-Length": []string{strconv.Itoa(len(resp))},
+			},
+			Data: resp,
+		})
+	})
+	if err != nil {
+		t.Fatalf("failed to subscribe to command subject: %v", err)
+	}
+	if err := harness.natsConn.Flush(); err != nil {
+		t.Fatalf("failed to flush subscription: %v", err)
+	}
+
+	client := NewClient(harness.baseURL)
+	list, err := client.BoardList()
+	if err != nil {
+		t.Fatalf("board list failed: %v", err)
+	}
+	if len(list.Boards) != 2 {
+		t.Fatalf("expected 2 boards, got %d", len(list.Boards))
+	}
+}
+
+func TestBoardCreateUsesJSON(t *testing.T) {
+	harness := startHarness(t)
+
+	_, err := harness.natsConn.Subscribe("h8s.http.POST.localhost.api.commands", func(msg *nats.Msg) {
+		var req commands.CommandRequest
+		if err := json.Unmarshal(msg.Data, &req); err != nil {
+			return
+		}
+		if req.Type != commands.CommandBoardCreate {
+			return
+		}
+		resp, _ := json.Marshal(commands.CommandResponse{Status: "ok", Board: req.Board})
+		msg.RespondMsg(&nats.Msg{
+			Header: nats.Header{
+				"Status-Code":    []string{"200"},
+				"Content-Type":   []string{"application/json"},
+				"Content-Length": []string{strconv.Itoa(len(resp))},
+			},
+			Data: resp,
+		})
+	})
+	if err != nil {
+		t.Fatalf("failed to subscribe to command subject: %v", err)
+	}
+	if err := harness.natsConn.Flush(); err != nil {
+		t.Fatalf("failed to flush subscription: %v", err)
+	}
+
+	client := NewClient(harness.baseURL)
+	resp, err := client.BoardCreate("alpha")
+	if err != nil {
+		t.Fatalf("board create failed: %v", err)
+	}
+	if resp.Board != "alpha" {
+		t.Fatalf("expected board alpha, got %q", resp.Board)
 	}
 }
 

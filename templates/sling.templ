@@ -1,21 +1,23 @@
 package templates
 
-templ Sling(message string) {
-  <div id="slings"
-    hx-swap-oob="afterbegin"> 
-    <div id="sling"
-      class="sling text-white"> 
-      { message } 
+templ Sling(id string, timestamp string, message string) {
+  <div id={ "sling-" + id } class="sling text-white" data-sling-id={ id } tabindex="-1">
+    <div class="sling-card">
+      <div class="sling-card__content text-3xl font-semibold leading-relaxed whitespace-pre-wrap">
+        { message }
+      </div>
+      <span class="sling-meta" data-timestamp={ timestamp }></span>
     </div>
   </div>
 }
 
-templ SlingImage(imagecontent string) {
-  <div id="slings"
-    hx-swap-oob="afterbegin"> 
-    <div id="sling"
-      class="sling text-white"> 
-      <img src={ imagecontent } class="w-[80vw] h-[80vh] w-auto h-auto" />
+templ SlingImage(id string, timestamp string, imagecontent string) {
+  <div id={ "sling-" + id } class="sling text-white" data-sling-id={ id } tabindex="-1">
+    <div class="sling-card">
+      <div class="sling-card__content">
+        <img src={ imagecontent } />
+      </div>
+      <span class="sling-meta" data-timestamp={ timestamp }></span>
     </div>
   </div>
 }
@@ -24,15 +26,26 @@ templ SlingPDF() {
   <div></div>
 }
 
-templ SlingURL( url string ) {
-  <div id="slings"
-    hx-swap-oob="afterbegin"> 
-    <div id="sling"
-      class="sling text-white"> 
-      <iframe src={ url }
-        class="w-[80vw] h-[80vh] border-none" 
-        sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-presentation allow-top-navigation allow-top-navigation-by-user-activation">
-      </iframe>
+templ SlingURL(id string, timestamp string, url string) {
+  <div id={ "sling-" + id } class="sling text-white" data-sling-id={ id } tabindex="-1">
+    <div class="sling-card">
+      <div class="sling-card__content">
+        <iframe src={ url }
+          sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-presentation allow-top-navigation allow-top-navigation-by-user-activation">
+        </iframe>
+      </div>
+      <span class="sling-meta" data-timestamp={ timestamp }></span>
+    </div>
+  </div>
+}
+
+templ SlingMarkdown(id string, timestamp string, html string) {
+  <div id={ "sling-" + id } class="sling text-white" data-sling-id={ id } tabindex="-1">
+    <div class="sling-card">
+      <div class="sling-card__content prose prose-invert max-w-none">
+        @templ.Raw(html)
+      </div>
+      <span class="sling-meta" data-timestamp={ timestamp }></span>
     </div>
   </div>
 }
@@ -41,12 +54,13 @@ templ SlingMarkdowns() {
   <div></div>
 }
 
-templ SlingCode(code string) {
-  <div id="slings"
-    hx-swap-oob="afterbegin"> 
-    <div id="sling"
-      class="sling text-white"> 
-      @templ.Raw(code)
+templ SlingCode(id string, timestamp string, code string) {
+  <div id={ "sling-" + id } class="sling text-white" data-sling-id={ id } tabindex="-1">
+    <div class="sling-card">
+      <div class="sling-card__content">
+        @templ.Raw(code)
+      </div>
+      <span class="sling-meta" data-timestamp={ timestamp }></span>
     </div>
   </div>
 }

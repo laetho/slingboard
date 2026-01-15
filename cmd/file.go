@@ -7,6 +7,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var fileBoard string
+
 var slingFile = &cobra.Command{
 	Use:   "file <filename>",
 	Short: "Sling a file",
@@ -16,14 +18,16 @@ var slingFile = &cobra.Command{
 			log.Fatalf("No file provided")
 		}
 		filename := args[0]
+		board := requireBoard(fileBoard)
 
 		client := sc.NewClient(apiURL)
-		if err := client.SendFile("global", filename); err != nil {
+		if err := client.SendFile(board, filename); err != nil {
 			log.Fatalf("Unable to send message: %v", err)
 		}
 	},
 }
 
 func init() {
+	slingFile.Flags().StringVarP(&fileBoard, "board", "b", "", "Board name (required)")
 	rootCmd.AddCommand(slingFile)
 }

@@ -1,80 +1,494 @@
-package templates 
+package templates
 
-templ Index() {
+templ BoardCard(name string) {
+  <a href={ templ.SafeURL("/board/" + name + "/") }
+     data-board-name={ name }
+     class="group rounded-2xl border border-slate-800/70 bg-slate-900/60 p-6 transition hover:-translate-y-1 hover:border-slate-600/70 hover:bg-slate-900/80">
+    <div class="flex items-start justify-between">
+      <div>
+        <p class="text-xs uppercase tracking-[0.2em] text-slate-500">slingBoard</p>
+        <h3 class="mt-2 text-xl font-semibold text-slate-100">{ name }</h3>
+      </div>
+      <span class="rounded-full border border-slate-700/60 bg-slate-800/60 px-3 py-1 text-xs uppercase tracking-[0.2em] text-slate-300">
+        View
+      </span>
+    </div>
+    <p class="mt-4 text-sm text-slate-400">Open the live stream for this slingBoard.</p>
+  </a>
+}
+
+templ BoardsIndex(boardCards string) {
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>slingBoard</title>
+  <title>SlingBoard boards</title>
   <link rel="stylesheet" href="/static/style.css">
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js"></script>
-  <script src="https://unpkg.com/htmx-ext-ws@2.0.3"></script>
-  <style>
-    .scroll-container {
-      height: 100vh;
-      overflow-y: auto;
-      scroll-snap-type: y mandatory;
-      scroll-behavior: smooth;
-      flex-direction: column-reverse;
-    }
-    .sling {
-      min-height: 100vh;
-      scroll-snap-align: start;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 2rem;
-      font-weight: bold;
-    }
+  <script type="module" src="https://cdn.jsdelivr.net/gh/starfederation/datastar@1.0.0-RC.7/bundles/datastar.js"></script>
+</head>
+<body class="min-h-screen bg-slate-950 text-slate-100 hero-gradient">
+  <header class="border-b border-slate-800/70 bg-slate-950/70 backdrop-blur-xl">
+    <div class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-6 px-6 py-6">
+      <div>
+        <p class="text-sm uppercase tracking-[0.2em] text-slate-400">SlingBoard</p>
+        <h1 class="mt-2 text-3xl font-semibold">slingBoards</h1>
+        <p class="mt-2 max-w-xl text-sm text-slate-400">Search existing slingBoards or create a new one to start slinging.</p>
+      </div>
+      <div class="flex w-full flex-col gap-3 sm:w-auto sm:min-w-[280px]">
+        <label class="text-xs uppercase tracking-[0.2em] text-slate-500">Search slingBoards</label>
+        <input id="board-search" type="search" placeholder="Search" class="rounded-xl border border-slate-700/70 bg-slate-900/70 px-4 py-3 text-sm text-slate-200 placeholder:text-slate-600 focus:border-slate-500 focus:outline-none">
+      </div>
+    </div>
+  </header>
 
-    .chroma {
-      font-size : 1rem;
-      height: 100%;
-    }
-  </style>
+  <main class="mx-auto max-w-6xl px-6 py-10">
+    <section class="rounded-3xl border border-slate-800/70 bg-slate-900/40 p-6 shadow-2xl">
+      <div class="flex flex-wrap items-center justify-between gap-6">
+        <div>
+          <h2 class="text-xl font-semibold">Create a slingBoard</h2>
+          <p class="mt-1 text-sm text-slate-400">slingBoard names are URI compatible and lower-case.</p>
+        </div>
+        <div class="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
+          <input id="board-create" type="text" placeholder="new-board" class="flex-1 rounded-xl border border-slate-700/70 bg-slate-900/70 px-4 py-3 text-sm text-slate-200 placeholder:text-slate-600 focus:border-slate-500 focus:outline-none">
+          <button id="board-create-btn" class="rounded-xl bg-slate-200 px-5 py-3 text-sm font-semibold text-slate-900 transition hover:bg-white">Create</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="mt-10">
+      <div class="flex items-center justify-between">
+        <h2 class="text-xl font-semibold">Available slingBoards</h2>
+        <span class="text-xs uppercase tracking-[0.2em] text-slate-500" id="board-count"></span>
+      </div>
+      <div id="board-empty" class="mt-6 rounded-2xl border border-dashed border-slate-800/70 bg-slate-900/40 p-10 text-center text-sm text-slate-400">
+        Waiting for slings...
+      </div>
+      <div id="board-list" class="board-grid mt-6">
+        @templ.Raw(boardCards)
+      </div>
+    </section>
+  </main>
+
   <script>
-    document.addEventListener("DOMContentLoaded", () => {
+    const boardList = document.getElementById("board-list");
+    const boardEmpty = document.getElementById("board-empty");
+    const boardSearch = document.getElementById("board-search");
+    const boardCreate = document.getElementById("board-create");
+    const boardCreateBtn = document.getElementById("board-create-btn");
+    const boardCount = document.getElementById("board-count");
+
+    const normalizeBoardName = (value) => {
+      const lowered = value.trim().toLowerCase();
+      let output = "";
+      let lastDash = false;
+      for (const ch of lowered) {
+        if ((ch >= "a" && ch <= "z") || (ch >= "0" && ch <= "9") || ch === "-" || ch === "_") {
+          output += ch;
+          lastDash = false;
+        } else if (!lastDash) {
+          output += "-";
+          lastDash = true;
+        }
+      }
+      return output.replace(/^-+|-+$/g, "");
+    };
+
+    const updateEmptyState = () => {
+      const visibleCards = boardList.querySelectorAll("[data-board-name]:not(.hidden)").length;
+      boardEmpty.classList.toggle("hidden", visibleCards > 0);
+      boardCount.textContent = visibleCards > 0 ? visibleCards + " slingBoards" : "";
+    };
+
+    const filterBoards = () => {
+      const query = normalizeBoardName(boardSearch.value || "");
+      boardList.querySelectorAll("[data-board-name]").forEach((card) => {
+        const match = card.dataset.boardName.includes(query);
+        card.classList.toggle("hidden", !match);
+      });
+      updateEmptyState();
+    };
+
+    const createBoard = () => {
+      const name = normalizeBoardName(boardCreate.value || "");
+      if (!name) {
+        return;
+      }
+
+      const existing = boardList.querySelector('[data-board-name="' + name + '"]');
+      if (!existing) {
+        const card = document.createElement("a");
+        card.href = "/board/" + name + "/";
+        card.dataset.boardName = name;
+        card.className = "group rounded-2xl border border-slate-800/70 bg-slate-900/60 p-6 transition hover:-translate-y-1 hover:border-slate-600/70 hover:bg-slate-900/80";
+        card.innerHTML =
+          '<div class="flex items-start justify-between">' +
+          '<div>' +
+          '<p class="text-xs uppercase tracking-[0.2em] text-slate-500">slingBoard</p>' +
+          '<h3 class="mt-2 text-xl font-semibold text-slate-100">' + name + '</h3>' +
+          '</div>' +
+          '<span class="rounded-full border border-slate-700/60 bg-slate-800/60 px-3 py-1 text-xs uppercase tracking-[0.2em] text-slate-300">View</span>' +
+          '</div>' +
+          '<p class="mt-4 text-sm text-slate-400">Open the live stream for this slingBoard.</p>';
+        boardList.prepend(card);
+        updateEmptyState();
+      }
+
+      window.location.href = "/board/" + name + "/";
+    };
+
+    boardSearch?.addEventListener("input", filterBoards);
+    boardCreateBtn?.addEventListener("click", createBoard);
+    boardCreate?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        createBoard();
+      }
+    });
+
+    updateEmptyState();
+  </script>
+</body>
+</html>
+}
+
+templ BoardView(board string) {
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SlingBoard · { board }</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script type="module" src="https://cdn.jsdelivr.net/gh/starfederation/datastar@1.0.0-RC.7/bundles/datastar.js"></script>
+</head>
+<body class="h-screen bg-slate-950 text-slate-100 hero-gradient">
+  <header class="fixed top-0 left-0 w-full z-10 border-b border-slate-800/70 bg-slate-950/70 backdrop-blur-xl">
+    <div class="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
+      <div>
+        <p class="text-sm uppercase tracking-[0.2em] text-slate-400"><a href="/" class="hover:text-slate-200">slingBoard</a></p>
+        <h1 class="text-2xl font-semibold">{ board }</h1>
+      </div>
+      <div class="flex items-center gap-3">
+        <a href="/" class="rounded-full border border-slate-700/60 bg-slate-900/80 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-300">All slingBoards</a>
+        <button id="grid-toggle" class="rounded-full border border-slate-700/60 bg-slate-900/80 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-300">Grid view</button>
+      </div>
+    </div>
+  </header>
+
+  <div id="slingboard" class="scroll-container" data-board-name={ board }>
+    <div id="slings">
+      <div class="sling text-white" id="sling-placeholder">
+        <div class="sling-card text-2xl font-semibold text-center">
+          Waiting for slings...
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <button id="add-sling" class="floating-action" aria-label="Add sling" type="button">+</button>
+
+  <div id="add-sling-modal" class="modal" aria-hidden="true">
+    <div class="modal__backdrop" data-modal-close></div>
+    <div class="modal__card" role="dialog" aria-modal="true" aria-labelledby="add-sling-title">
+      <div class="modal__header">
+        <div>
+          <p class="text-xs uppercase tracking-[0.2em] text-slate-400">slingBoard</p>
+          <h2 id="add-sling-title" class="text-2xl font-semibold">Add sling</h2>
+        </div>
+        <button type="button" class="modal__close" data-modal-close aria-label="Close">×</button>
+      </div>
+
+      <div class="modal__tabs" role="tablist">
+        <button class="modal__tab is-active" type="button" data-tab="text">Message</button>
+        <button class="modal__tab" type="button" data-tab="url">URL</button>
+        <button class="modal__tab" type="button" data-tab="file">File</button>
+      </div>
+
+      <form id="add-sling-form" class="modal__body">
+        <div class="modal__panel" data-panel="text">
+          <label class="modal__label">Message</label>
+          <textarea id="sling-message" rows="5" placeholder="Write a message" class="modal__input"></textarea>
+        </div>
+
+        <div class="modal__panel hidden" data-panel="url">
+          <label class="modal__label">URL</label>
+          <input id="sling-url" type="url" placeholder="https://" class="modal__input" />
+        </div>
+
+        <div class="modal__panel hidden" data-panel="file">
+          <label class="modal__label">File</label>
+          <input id="sling-file" type="file" class="modal__input" />
+        </div>
+
+        <p id="sling-status" class="modal__status"></p>
+
+        <div class="modal__actions">
+          <button type="button" class="btn-secondary" data-modal-close>Cancel</button>
+          <button type="submit" class="btn-primary">Send sling</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script type="module">
+    window.addEventListener("DOMContentLoaded", () => {
       const container = document.querySelector(".scroll-container");
+      const slings = document.getElementById("slings");
+      const gridToggle = document.getElementById("grid-toggle");
+      const addButton = document.getElementById("add-sling");
+      const modal = document.getElementById("add-sling-modal");
+      const modalClose = modal?.querySelectorAll("[data-modal-close]") || [];
+      const tabs = modal?.querySelectorAll("[data-tab]") || [];
+      const panels = modal?.querySelectorAll("[data-panel]") || [];
+      const form = document.getElementById("add-sling-form");
+      const status = document.getElementById("sling-status");
+      const messageInput = document.getElementById("sling-message");
+      const urlInput = document.getElementById("sling-url");
+      const fileInput = document.getElementById("sling-file");
+      let activeTab = "text";
+
+      if (!container || !slings) {
+        return;
+      }
 
       let isUserScrolling = false;
       let lastScrollPosition = container.scrollTop;
+      let isGridMode = false;
+
+      const setGridMode = (enabled) => {
+        isGridMode = enabled;
+        container.classList.toggle("grid-mode", enabled);
+        slings.classList.toggle("grid-mode", enabled);
+        gridToggle.textContent = enabled ? "Scroll view" : "Grid view";
+      };
+
+      const trimSlings = () => {
+        const items = slings.querySelectorAll(".sling");
+        if (items.length <= 20) {
+          return;
+        }
+        for (let i = items.length - 1; i >= 20; i -= 1) {
+          items[i].remove();
+        }
+      };
 
       container.addEventListener("scroll", () => {
         isUserScrolling = Math.abs(container.scrollTop - lastScrollPosition) > 10;
         lastScrollPosition = container.scrollTop;
       });
 
-      document.addEventListener("htmx:wsAfterMessage", () => {
-        const firstSling = document.querySelector(".sling");
+      gridToggle?.addEventListener("click", () => {
+        setGridMode(!isGridMode);
+      });
 
-        // Auto-scroll only if the user is near the top
-        if (!isUserScrolling && firstSling) {
+      slings.addEventListener("click", (event) => {
+        if (!isGridMode) {
+          return;
+        }
+        const target = event.target.closest("[data-sling-id]");
+        if (!target) {
+          return;
+        }
+        setGridMode(false);
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+
+      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+      const ws = new WebSocket(protocol + "://" + window.location.host + window.location.pathname);
+
+      const setStatus = (text, isError = false) => {
+        if (!status) {
+          return;
+        }
+        status.textContent = text;
+        status.classList.toggle("is-error", isError);
+      };
+
+      const openModal = () => {
+        modal?.classList.add("is-open");
+        modal?.setAttribute("aria-hidden", "false");
+        setStatus("");
+      };
+
+      const closeModal = () => {
+        modal?.classList.remove("is-open");
+        modal?.setAttribute("aria-hidden", "true");
+        setStatus("");
+        if (messageInput) messageInput.value = "";
+        if (urlInput) urlInput.value = "";
+        if (fileInput) fileInput.value = "";
+      };
+
+      const setActiveTab = (name) => {
+        activeTab = name;
+        tabs.forEach((tab) => tab.classList.toggle("is-active", tab.dataset.tab === name));
+        panels.forEach((panel) => panel.classList.toggle("hidden", panel.dataset.panel !== name));
+      };
+
+      const readFileAsBase64 = (file) =>
+        new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = String(reader.result || "");
+            const commaIndex = result.indexOf(",");
+            if (commaIndex === -1) {
+              reject(new Error("Invalid file encoding"));
+              return;
+            }
+            resolve(result.slice(commaIndex + 1));
+          };
+          reader.onerror = () => reject(new Error("Failed to read file"));
+          reader.readAsDataURL(file);
+        });
+
+      const submitSling = async (event) => {
+        event.preventDefault();
+        const board = container.dataset.boardName || "";
+        if (!board) {
+          setStatus("Missing board name", true);
+          return;
+        }
+
+        let payload = { type: activeTab, board: board, content: "" };
+
+        try {
+          if (activeTab === "text") {
+            const value = messageInput?.value.trim() || "";
+            if (!value) {
+              setStatus("Message is required", true);
+              return;
+            }
+            payload.content = value;
+          } else if (activeTab === "url") {
+            const value = urlInput?.value.trim() || "";
+            if (!value) {
+              setStatus("URL is required", true);
+              return;
+            }
+            payload.content = value;
+          } else if (activeTab === "file") {
+            const file = fileInput?.files?.[0];
+            if (!file) {
+              setStatus("File is required", true);
+              return;
+            }
+            const encoded = await readFileAsBase64(file);
+            payload = {
+              type: "file",
+              board: board,
+              content: encoded,
+              filename: file.name,
+              mime_type: file.type || "application/octet-stream",
+            };
+          }
+
+          setStatus("Sending...");
+
+          const response = await fetch("/api/commands", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify(payload),
+          });
+
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok || data.status === "error") {
+            throw new Error(data.message || "Failed to send sling");
+          }
+
+          closeModal();
+        } catch (error) {
+          setStatus(error.message || "Failed to send sling", true);
+        }
+      };
+
+      addButton?.addEventListener("click", openModal);
+      modalClose.forEach((button) => button.addEventListener("click", closeModal));
+      tabs.forEach((tab) => tab.addEventListener("click", () => setActiveTab(tab.dataset.tab)));
+      form?.addEventListener("submit", submitSling);
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          closeModal();
+        }
+      });
+
+      const formatTimestamp = (element) => {
+        if (!element) {
+          return;
+        }
+        const iso = element.dataset.timestamp;
+        if (!iso) {
+          return;
+        }
+        const date = new Date(iso);
+        if (Number.isNaN(date.getTime())) {
+          return;
+        }
+        const parts = new Intl.DateTimeFormat(undefined, {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          timeZoneName: "short",
+        }).formatToParts(date);
+        const lookup = (type) => parts.find((part) => part.type === type)?.value || "";
+        const timestamp =
+          lookup("year") +
+          "-" +
+          lookup("month") +
+          "-" +
+          lookup("day") +
+          " " +
+          lookup("hour") +
+          ":" +
+          lookup("minute") +
+          " " +
+          lookup("timeZoneName");
+        element.textContent = timestamp.trim();
+      };
+
+      const formatTimestamps = (scope) => {
+        const targets = (scope || document).querySelectorAll(".sling-meta[data-timestamp]");
+        targets.forEach((target) => formatTimestamp(target));
+      };
+
+      formatTimestamps(document);
+
+      ws.addEventListener("message", (event) => {
+        const html = event.data;
+
+        document.dispatchEvent(
+          new CustomEvent("datastar-fetch", {
+            detail: {
+              type: "datastar-patch-elements",
+              argsRaw: {
+                selector: "#slings",
+                mode: "prepend",
+                elements: html,
+              },
+            },
+          }),
+        );
+
+        trimSlings();
+
+        const firstSling = slings.firstElementChild;
+        if (firstSling) {
+          formatTimestamps(firstSling);
+          firstSling.classList.add("sling--focus");
+          firstSling.focus({ preventScroll: true });
+          window.setTimeout(() => firstSling.classList.remove("sling--focus"), 2000);
+        }
+
+        if (!isGridMode && !isUserScrolling && firstSling) {
           firstSling.scrollIntoView({ behavior: "smooth", block: "start" });
         }
       });
     });
   </script>
-</head>
-<body class="bg-gradient-to-b from-gray-900 to-gray-800 text-white h-screen">
-  
-  <div id="slingbar" class="fixed top-0 left-0 w-full z-10 bg-gray-800 bg-opacity-90 p-4 text-center text-2xl font-bold shadow-md">
-    sB - slingBoard
-  </div>
-
-  <div id="slingboard"
-       hx-ext="ws"
-       ws-connect="/slings"
-       class="scroll-container">
-    <div id="slings" 
-         hx-swap-oob="afterbegin">
-      <div id="sling" class="sling text-white">
-        Waiting for slings...
-      </div>
-    </div>
-  </div>
-
 </body>
 </html>
 }

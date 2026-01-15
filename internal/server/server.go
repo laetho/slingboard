@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"mime"
 	"net/http"
+	"net/url"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,15 +25,21 @@ import (
 	staticfiles "github.com/laetho/slingboard/static"
 	"github.com/laetho/slingboard/templates"
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nuid"
+	"github.com/yuin/goldmark"
 )
 
 const (
-	commandSubject         = "slingboard.global"
+	defaultBoard           = "global"
+	commandSubjectPrefix   = "slingboard."
+	streamPrefix           = "sb_"
 	hostName               = "localhost"
 	indexSubject           = "h8s.http.GET.localhost"
+	boardSubjectPrefix     = "h8s.http.GET.localhost.board."
+	boardSubjectWildcard   = "h8s.http.GET.localhost.board.*"
 	commandsSubject        = "h8s.http.POST.localhost.api.commands"
 	styleSubject           = "h8s.http.GET.localhost.static.style%2Ecss"
-	websocketSubject       = "h8s.ws.ws.localhost.slings"
+	websocketSubjectPrefix = "h8s.ws.ws.localhost.board."
 	websocketEstablished   = "h8s.control.ws.conn.established"
 	websocketClosed        = "h8s.control.ws.conn.closed"
 	websocketPublishHeader = "X-H8s-PublishSubject"
@@ -38,31 +47,47 @@ const (
 	contentTypeHTML        = "text/html; charset=utf-8"
 	contentTypeJSON        = "application/json"
 	contentTypeCSS         = "text/css; charset=utf-8"
+	markdownMimeType       = "text/markdown"
 )
 
-type service struct {
-	nc        *nats.Conn
-	wsMu      sync.RWMutex
-	wsReplies map[string]struct{}
-	subs      []*nats.Subscription
+var markdownRenderer = goldmark.New()
+
+type wsConnection struct {
+	board        string
+	reply        string
+	consumerName string
+	streamName   string
+	stop         chan struct{}
 }
 
-func (s *service) hasWebsocketReply(reply string) bool {
+type service struct {
+	nc      *nats.Conn
+	js      nats.JetStreamContext
+	wsMu    sync.RWMutex
+	wsConns map[string]*wsConnection
+	subs    []*nats.Subscription
+}
+
+func (s *service) hasWebsocketReply(board string, reply string) bool {
 	s.wsMu.RLock()
 	defer s.wsMu.RUnlock()
-	_, ok := s.wsReplies[reply]
-	return ok
+	conn, ok := s.wsConns[reply]
+	return ok && conn.board == board
 }
 
-func newService(nc *nats.Conn) *service {
+func newService(nc *nats.Conn, js nats.JetStreamContext) *service {
 	return &service{
-		nc:        nc,
-		wsReplies: make(map[string]struct{}),
+		nc:      nc,
+		js:      js,
+		wsConns: make(map[string]*wsConnection),
 	}
 }
 
 func (s *service) register() error {
 	if err := s.queueSubscribe(indexSubject, s.handleIndex); err != nil {
+		return err
+	}
+	if err := s.queueSubscribe(boardSubjectWildcard, s.handleBoard); err != nil {
 		return err
 	}
 	if err := s.queueSubscribe(commandsSubject, s.handleCommands); err != nil {
@@ -75,9 +100,6 @@ func (s *service) register() error {
 		return err
 	}
 	if err := s.subscribe(websocketClosed, s.handleWebsocketControl); err != nil {
-		return err
-	}
-	if err := s.subscribe(commandSubject, s.broadcastSling); err != nil {
 		return err
 	}
 	return nil
@@ -105,6 +127,17 @@ func (s *service) shutdown() {
 	for _, sub := range s.subs {
 		_ = sub.Unsubscribe()
 	}
+
+	s.wsMu.Lock()
+	replies := make([]string, 0, len(s.wsConns))
+	for reply := range s.wsConns {
+		replies = append(replies, reply)
+	}
+	s.wsMu.Unlock()
+
+	for _, reply := range replies {
+		s.stopWebsocketConsumer(reply)
+	}
 }
 
 func Start() {
@@ -113,7 +146,12 @@ func Start() {
 		log.Fatalf("Error connecting to NATS: %v", err)
 	}
 
-	svc := newService(nc)
+	js, err := nc.JetStream()
+	if err != nil {
+		log.Fatalf("Error creating JetStream context: %v", err)
+	}
+
+	svc := newService(nc, js)
 	if err := svc.register(); err != nil {
 		log.Fatalf("Error registering subscriptions: %v", err)
 	}
@@ -123,14 +161,102 @@ func Start() {
 }
 
 func (s *service) handleIndex(msg *nats.Msg) {
+	boards, err := s.listBoards()
+	if err != nil {
+		s.respondError(msg, http.StatusInternalServerError, "failed to list boards")
+		return
+	}
+
+	boardCards, err := renderBoardCards(boards)
+	if err != nil {
+		s.respondError(msg, http.StatusInternalServerError, "failed to render board list")
+		return
+	}
+
 	var buf bytes.Buffer
-	component := templates.Index()
+	component := templates.BoardsIndex(boardCards)
 	if err := component.Render(context.Background(), &buf); err != nil {
 		s.respondError(msg, http.StatusInternalServerError, "failed to render index")
 		return
 	}
 
 	s.respond(msg, http.StatusOK, contentTypeHTML, buf.Bytes())
+}
+
+func (s *service) handleBoard(msg *nats.Msg) {
+	board, ok := boardFromSubject(msg.Subject, boardSubjectPrefix)
+	if !ok {
+		s.respondError(msg, http.StatusNotFound, "board not found")
+		return
+	}
+
+	if _, err := s.ensureBoardStream(board); err != nil {
+		s.respondError(msg, http.StatusInternalServerError, "failed to ensure board stream")
+		return
+	}
+
+	var buf bytes.Buffer
+	component := templates.BoardView(board)
+	if err := component.Render(context.Background(), &buf); err != nil {
+		s.respondError(msg, http.StatusInternalServerError, "failed to render board")
+		return
+	}
+
+	s.respond(msg, http.StatusOK, contentTypeHTML, buf.Bytes())
+}
+
+func (s *service) listBoards() ([]string, error) {
+	boardSet := make(map[string]struct{})
+	for name := range s.js.StreamNames() {
+		if !strings.HasPrefix(name, streamPrefix) {
+			continue
+		}
+		board := strings.TrimPrefix(name, streamPrefix)
+		if board == "" {
+			continue
+		}
+		boardSet[board] = struct{}{}
+	}
+
+	boards := make([]string, 0, len(boardSet))
+	for board := range boardSet {
+		boards = append(boards, board)
+	}
+	sort.Strings(boards)
+	return boards, nil
+}
+
+func renderBoardCards(boards []string) (string, error) {
+	var buf bytes.Buffer
+	for _, board := range boards {
+		component := templates.BoardCard(board)
+		if err := component.Render(context.Background(), &buf); err != nil {
+			return "", err
+		}
+	}
+	return buf.String(), nil
+}
+
+func (s *service) ensureBoardStream(board string) (string, error) {
+	streamName := streamPrefix + board
+	if _, err := s.js.StreamInfo(streamName); err == nil {
+		return streamName, nil
+	} else if !errors.Is(err, nats.ErrStreamNotFound) {
+		return "", err
+	}
+
+	_, err := s.js.AddStream(&nats.StreamConfig{
+		Name:      streamName,
+		Subjects:  []string{commandSubjectPrefix + board},
+		Retention: nats.InterestPolicy,
+		MaxAge:    24 * time.Hour,
+		Storage:   nats.FileStorage,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	return streamName, nil
 }
 
 func (s *service) handleStyle(msg *nats.Msg) {
@@ -150,6 +276,15 @@ func (s *service) handleCommands(msg *nats.Msg) {
 		return
 	}
 
+	switch request.Type {
+	case commands.CommandBoardList:
+		s.handleBoardList(msg)
+		return
+	case commands.CommandBoardCreate:
+		s.handleBoardCreate(msg, request)
+		return
+	}
+
 	payload, mimeType, err := commandPayload(request)
 	if err != nil {
 		s.respondCommandError(msg, http.StatusBadRequest, err.Error())
@@ -158,9 +293,14 @@ func (s *service) handleCommands(msg *nats.Msg) {
 
 	id := strconv.FormatInt(time.Now().UnixNano(), 10)
 	timestamp := time.Now().UTC()
-	board := request.Board
+	board := normalizeBoardName(request.Board)
 	if board == "" {
-		board = "global"
+		board = defaultBoard
+	}
+
+	if _, err := s.ensureBoardStream(board); err != nil {
+		s.respondCommandError(msg, http.StatusInternalServerError, "failed to ensure board stream")
+		return
 	}
 
 	sling := slingmessage.SlingMessage{
@@ -176,7 +316,8 @@ func (s *service) handleCommands(msg *nats.Msg) {
 		return
 	}
 
-	if err := s.nc.Publish(commandSubject, jsonData); err != nil {
+	publishSubject := commandSubjectPrefix + board
+	if err := s.nc.Publish(publishSubject, jsonData); err != nil {
 		s.respondCommandError(msg, http.StatusBadGateway, "failed to publish message")
 		return
 	}
@@ -197,50 +338,203 @@ func (s *service) handleCommands(msg *nats.Msg) {
 
 func (s *service) handleWebsocketControl(msg *nats.Msg) {
 	publishSubject := msg.Header.Get(websocketPublishHeader)
-	if publishSubject != websocketSubject {
+	board, ok := boardFromSubject(publishSubject, websocketSubjectPrefix)
+	if !ok {
+		return
+	}
+
+	switch msg.Subject {
+	case websocketEstablished:
+		s.startWebsocketConsumer(board, msg.Reply)
+	case websocketClosed:
+		s.stopWebsocketConsumer(msg.Reply)
+	}
+}
+
+func (s *service) handleBoardList(msg *nats.Msg) {
+	boards, err := s.listBoards()
+	if err != nil {
+		s.respondCommandError(msg, http.StatusInternalServerError, "failed to list boards")
+		return
+	}
+
+	if wantsJSON(msg) {
+		s.respondJSON(msg, http.StatusOK, commands.CommandResponse{
+			Status: "ok",
+			Boards: boards,
+		})
+		return
+	}
+
+	var buf strings.Builder
+	buf.WriteString("<ul>")
+	for _, board := range boards {
+		buf.WriteString("<li>")
+		buf.WriteString(board)
+		buf.WriteString("</li>")
+	}
+	buf.WriteString("</ul>")
+	s.respond(msg, http.StatusOK, contentTypeHTML, []byte(buf.String()))
+}
+
+func (s *service) handleBoardCreate(msg *nats.Msg, request commands.CommandRequest) {
+	board := normalizeBoardName(request.Board)
+	if board == "" {
+		s.respondCommandError(msg, http.StatusBadRequest, "board is required")
+		return
+	}
+
+	if _, err := s.ensureBoardStream(board); err != nil {
+		s.respondCommandError(msg, http.StatusInternalServerError, "failed to ensure board stream")
+		return
+	}
+
+	if wantsJSON(msg) {
+		s.respondJSON(msg, http.StatusOK, commands.CommandResponse{
+			Status: "ok",
+			Board:  board,
+		})
+		return
+	}
+
+	html := "<ul><li>" + board + "</li></ul>"
+	s.respond(msg, http.StatusOK, contentTypeHTML, []byte(html))
+}
+
+func wantsJSON(msg *nats.Msg) bool {
+	accept := msg.Header.Get("Accept")
+	return strings.Contains(accept, "application/json")
+}
+
+func (s *service) startWebsocketConsumer(board string, reply string) {
+	if reply == "" {
+		return
+	}
+
+	streamName, err := s.ensureBoardStream(board)
+	if err != nil {
+		log.Printf("Failed to ensure board stream: %v", err)
 		return
 	}
 
 	s.wsMu.Lock()
-	defer s.wsMu.Unlock()
+	if _, exists := s.wsConns[reply]; exists {
+		s.wsMu.Unlock()
+		return
+	}
+	consumerName := "ws-" + nuid.Next()
+	conn := &wsConnection{
+		board:        board,
+		reply:        reply,
+		consumerName: consumerName,
+		streamName:   streamName,
+		stop:         make(chan struct{}),
+	}
+	s.wsConns[reply] = conn
+	s.wsMu.Unlock()
 
-	switch msg.Subject {
-	case websocketEstablished:
-		s.wsReplies[msg.Reply] = struct{}{}
-	case websocketClosed:
-		delete(s.wsReplies, msg.Reply)
+	_, err = s.js.AddConsumer(streamName, &nats.ConsumerConfig{
+		Durable:       consumerName,
+		AckPolicy:     nats.AckExplicitPolicy,
+		AckWait:       30 * time.Second,
+		FilterSubject: commandSubjectPrefix + board,
+		DeliverPolicy: nats.DeliverAllPolicy,
+		ReplayPolicy:  nats.ReplayInstantPolicy,
+	})
+	if err != nil {
+		log.Printf("Failed to create consumer: %v", err)
+		s.stopWebsocketConsumer(reply)
+		return
+	}
+
+	sub, err := s.js.PullSubscribe(commandSubjectPrefix+board, consumerName, nats.Bind(streamName, consumerName), nats.ManualAck())
+	if err != nil {
+		log.Printf("Failed to subscribe to consumer: %v", err)
+		s.stopWebsocketConsumer(reply)
+		return
+	}
+
+	go s.consumeWebsocket(conn, sub)
+}
+
+func (s *service) consumeWebsocket(conn *wsConnection, sub *nats.Subscription) {
+	defer sub.Unsubscribe()
+	for {
+		select {
+		case <-conn.stop:
+			return
+		default:
+			msgs, err := sub.Fetch(1, nats.MaxWait(2*time.Second))
+			if err != nil {
+				if errors.Is(err, nats.ErrTimeout) {
+					continue
+				}
+				if errors.Is(err, nats.ErrConnectionClosed) || errors.Is(err, nats.ErrBadSubscription) {
+					return
+				}
+				log.Printf("Failed to fetch messages: %v", err)
+				continue
+			}
+			for _, msg := range msgs {
+				var sling slingmessage.SlingMessage
+				if err := json.Unmarshal(msg.Data, &sling); err != nil {
+					log.Printf("Error unmarshalling message: %v", err)
+					_ = msg.Ack()
+					continue
+				}
+
+				payload, err := renderSling(&sling)
+				if err != nil {
+					log.Printf("Error rendering sling message: %v", err)
+					_ = msg.Ack()
+					continue
+				}
+
+				if err := s.nc.Publish(conn.reply, []byte(payload)); err != nil {
+					log.Printf("Error sending websocket reply: %v", err)
+				}
+				_ = msg.Ack()
+			}
+		}
 	}
 }
 
-func (s *service) broadcastSling(msg *nats.Msg) {
-	var sling slingmessage.SlingMessage
-	if err := json.Unmarshal(msg.Data, &sling); err != nil {
-		log.Printf("Error unmarshalling message: %v", err)
-		return
+func (s *service) stopWebsocketConsumer(reply string) {
+	s.wsMu.Lock()
+	conn, ok := s.wsConns[reply]
+	if ok {
+		delete(s.wsConns, reply)
+		close(conn.stop)
 	}
+	s.wsMu.Unlock()
 
-	payload, err := renderSling(&sling)
-	if err != nil {
-		log.Printf("Error rendering sling message: %v", err)
-		return
-	}
-
-	s.wsMu.RLock()
-	defer s.wsMu.RUnlock()
-
-	for reply := range s.wsReplies {
-		if err := s.nc.Publish(reply, []byte(payload)); err != nil {
-			log.Printf("Error sending websocket reply: %v", err)
-		}
+	if ok {
+		_ = s.js.DeleteConsumer(conn.streamName, conn.consumerName)
 	}
 }
 
 func renderSling(sling *slingmessage.SlingMessage) (string, error) {
 	var buf bytes.Buffer
+	id := sling.ID
+	timestamp := sling.Timestamp
+	if id == "" {
+		if !timestamp.IsZero() {
+			id = strconv.FormatInt(timestamp.UnixNano(), 10)
+		} else {
+			timestamp = time.Now().UTC()
+			id = strconv.FormatInt(timestamp.UnixNano(), 10)
+		}
+	}
+	if timestamp.IsZero() {
+		timestamp = time.Now().UTC()
+	}
+	timestampLabel := timestamp.UTC().Format(time.RFC3339)
 
 	switch {
 	case strings.HasPrefix(sling.MimeType, "image/"):
 		component := templates.SlingImage(
+			id,
+			timestampLabel,
 			fmt.Sprintf(
 				"data:%s;base64,%s", sling.MimeType, base64.RawStdEncoding.EncodeToString(sling.Content)),
 		)
@@ -253,19 +547,29 @@ func renderSling(sling *slingmessage.SlingMessage) (string, error) {
 		if err := quick.Highlight(&buffer, string(sling.Content), "go", "html", "monokai"); err != nil {
 			return "", err
 		}
-		component := templates.SlingCode(buffer.String())
+		component := templates.SlingCode(id, timestampLabel, buffer.String())
 		if err := component.Render(context.Background(), &buf); err != nil {
 			return "", err
 		}
 
 	case strings.HasPrefix(sling.MimeType, "text/x-uri"):
-		component := templates.SlingURL(string(sling.Content))
+		component := templates.SlingURL(id, timestampLabel, string(sling.Content))
+		if err := component.Render(context.Background(), &buf); err != nil {
+			return "", err
+		}
+
+	case sling.MimeType == markdownMimeType || strings.HasPrefix(sling.MimeType, "text/x-markdown"):
+		var mdBuffer bytes.Buffer
+		if err := markdownRenderer.Convert(sling.Content, &mdBuffer); err != nil {
+			return "", err
+		}
+		component := templates.SlingMarkdown(id, timestampLabel, mdBuffer.String())
 		if err := component.Render(context.Background(), &buf); err != nil {
 			return "", err
 		}
 
 	case strings.HasPrefix(sling.MimeType, "text/"):
-		component := templates.Sling(string(sling.Content))
+		component := templates.Sling(id, timestampLabel, string(sling.Content))
 		if err := component.Render(context.Background(), &buf); err != nil {
 			return "", err
 		}
@@ -305,10 +609,15 @@ func commandPayload(request commands.CommandRequest) ([]byte, string, error) {
 }
 
 func detectMimeType(filename string, data []byte) string {
+	ext := strings.ToLower(filepath.Ext(filename))
+	if ext == ".md" || ext == ".markdown" {
+		return markdownMimeType
+	}
+
 	peekSize := min(len(data), 512)
 	mimeType := http.DetectContentType(data[:peekSize])
 	if isTextMime(mimeType) {
-		if ext := filepath.Ext(filename); ext != "" {
+		if ext != "" {
 			if fromExt := mime.TypeByExtension(ext); fromExt != "" {
 				return fromExt
 			}
@@ -368,4 +677,70 @@ func (s *service) respondCommandError(msg *nats.Msg, status int, message string)
 		Status:  "error",
 		Message: message,
 	})
+}
+
+func boardFromSubject(subject string, prefix string) (string, bool) {
+	if !strings.HasPrefix(subject, prefix) {
+		return "", false
+	}
+
+	segment := strings.TrimPrefix(subject, prefix)
+	if segment == "" {
+		return "", false
+	}
+
+	decoded, err := url.PathUnescape(segment)
+	if err != nil {
+		decoded = segment
+	}
+
+	board := normalizeBoardName(decoded)
+	if board == "" {
+		return "", false
+	}
+
+	return board, true
+}
+
+func boardFromCommandSubject(subject string) (string, bool) {
+	if !strings.HasPrefix(subject, commandSubjectPrefix) {
+		return "", false
+	}
+
+	board := strings.TrimPrefix(subject, commandSubjectPrefix)
+	if board == "" {
+		return "", false
+	}
+
+	board = normalizeBoardName(board)
+	if board == "" {
+		return "", false
+	}
+
+	return board, true
+}
+
+func normalizeBoardName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return ""
+	}
+
+	var builder strings.Builder
+	lastDash := false
+	for _, char := range name {
+		isAllowed := (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || char == '-' || char == '_'
+		if isAllowed {
+			builder.WriteRune(char)
+			lastDash = false
+			continue
+		}
+
+		if !lastDash {
+			builder.WriteRune('-')
+			lastDash = true
+		}
+	}
+
+	return strings.Trim(builder.String(), "-")
 }

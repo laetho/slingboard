@@ -5,9 +5,11 @@ import "time"
 type CommandType string
 
 const (
-	CommandText CommandType = "text"
-	CommandURL  CommandType = "url"
-	CommandFile CommandType = "file"
+	CommandText        CommandType = "text"
+	CommandURL         CommandType = "url"
+	CommandFile        CommandType = "file"
+	CommandBoardList   CommandType = "board.list"
+	CommandBoardCreate CommandType = "board.create"
 )
 
 type CommandRequest struct {
@@ -23,5 +25,6 @@ type CommandResponse struct {
 	Status    string    `json:"status"`
 	Message   string    `json:"message,omitempty"`
 	Board     string    `json:"board,omitempty"`
+	Boards    []string  `json:"boards,omitempty"`
 	Timestamp time.Time `json:"timestamp,omitempty"`
 }
