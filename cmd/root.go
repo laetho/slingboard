@@ -8,6 +8,8 @@ import (
 	"github.com/spf13/viper"
 )
 
+var apiURL string
+
 var rootCmd = &cobra.Command{
 	Use:   "sling",
 	Short: "Sling Board CLI",
@@ -31,6 +33,7 @@ func Execute() {
 
 func init() {
 	cobra.OnInitialize(initConfig)
+	rootCmd.PersistentFlags().StringVar(&apiURL, "api-url", "http://localhost:8080", "SlingBoard API base URL")
 }
 
 func initConfig() {

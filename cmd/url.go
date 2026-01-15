@@ -17,8 +17,8 @@ var slingUrl = &cobra.Command{
 		}
 		url := args[0]
 
-		client := sc.NewClient()
-		if err := client.SlingURL("slingboard.global", url); err != nil {
+		client := sc.NewClient(apiURL)
+		if err := client.SendURL("global", url); err != nil {
 			log.Fatalf("Unable to send message: %v", err)
 		}
 	},

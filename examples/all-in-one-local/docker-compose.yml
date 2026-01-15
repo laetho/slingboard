@@ -1,0 +1,24 @@
+services:
+  nats:
+    image: nats:latest
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+
+  slingboard:
+    build:
+      context: ../..
+      dockerfile: examples/all-in-one-local/Dockerfile
+    command: ["serve"]
+    depends_on:
+      - nats
+    volumes:
+      - ./config:/app/config:ro
+
+  h8sd:
+    image: ghcr.io/mattilsynet/h8sd:latest
+    command: ["--nats-url=nats://nats:4222"]
+    depends_on:
+      - nats
+    ports:
+      - "8080:8080"

@@ -1,126 +1,135 @@
 package slingclient
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
+	"io"
 	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
-	"github.com/laetho/slingboard/internal/slingmessage"
-	"github.com/laetho/slingboard/internal/slingnats"
-	"github.com/nats-io/nats.go"
+	"github.com/laetho/slingboard/internal/commands"
 )
 
 type Client struct {
-	nc *nats.Conn
+	baseURL    string
+	httpClient *http.Client
 }
 
-func NewClient() *Client {
-	nc, err := slingnats.ConnectNATS()
-	if err != nil {
-		log.Fatalf("Error connecting to NATS: %v", err)
+func NewClient(baseURL string) *Client {
+	if baseURL == "" {
+		baseURL = "http://localhost:8080"
 	}
-
-	log.Printf("Connected to NATS at %s", nc.ConnectedUrl())
-
-	return &Client{nc: nc}
+	return &Client{
+		baseURL: strings.TrimRight(baseURL, "/"),
+		httpClient: &http.Client{
+			Timeout: 10 * time.Second,
+		},
+	}
 }
 
-func (c *Client) SendStringMessage(subject string, message []byte) error {
-	sling := &slingmessage.SlingMessage{}
-	sling.MimeType = "text/plain"
-	sling.Content = message
-
-	jsonData, err := json.Marshal(sling)
-	if err != nil {
-		return fmt.Errorf("failed to marshal message: %w", err)
-	}
-
-	err = c.nc.Publish(subject, jsonData)
-	if err != nil {
-		return err
-	}
-
-	// Ensure message is actually sent
-	err = c.nc.Flush()
-	if err != nil {
-		return fmt.Errorf("failed to flush message: %w", err)
-	}
-
-	return nil
+func (c *Client) SendText(board string, message string) error {
+	return c.sendCommand(commands.CommandRequest{
+		Type:    commands.CommandText,
+		Board:   board,
+		Content: message,
+	})
 }
 
-func (c *Client) SlingURL(subject string, url string) error {
-	sling := &slingmessage.SlingMessage{}
-	sling.MimeType = "text/x-uri"
-	sling.Content = []byte(url)
-
-	jsonData, err := json.Marshal(sling)
-	if err != nil {
-		return fmt.Errorf("failed to marshal message: %w", err)
-	}
-
-	err = c.nc.Publish(subject, jsonData)
-	if err != nil {
-		return err
-	}
-
-	// Ensure message is actually sent
-	err = c.nc.Flush()
-	if err != nil {
-		return fmt.Errorf("failed to flush message: %w", err)
-	}
-
-	return nil
+func (c *Client) SendURL(board string, url string) error {
+	return c.sendCommand(commands.CommandRequest{
+		Type:    commands.CommandURL,
+		Board:   board,
+		Content: url,
+	})
 }
 
-func (c *Client) SlingFile(subject string, file string) error {
-	sling := &slingmessage.SlingMessage{}
-
+func (c *Client) SendFile(board string, file string) error {
 	data, err := os.ReadFile(file)
 	if err != nil {
-		log.Fatalf("Failed to read file: %v", err)
+		return fmt.Errorf("failed to read file: %w", err)
 	}
 
-	// Extract first 512 bytes (or less if file is smaller)
-	peekSize := min(len(data), 512)
-	mimeType := http.DetectContentType(data[:peekSize])
-	ext := filepath.Ext(file)
-	mimeTypeExt := mime.TypeByExtension(ext)
-	finalMime := mimeType
-	if isTextMime(mimeType) {
-		finalMime = mimeTypeExt
-	}
+	mimeType := detectMimeType(file, data)
+	encoded := base64.StdEncoding.EncodeToString(data)
 
-	fmt.Println("Detected MIME Type:", mimeType)
-	fmt.Println("Detected MIME Type by extension:", mimeTypeExt)
-	fmt.Println("Final MIME Type:", finalMime)
+	return c.sendCommand(commands.CommandRequest{
+		Type:     commands.CommandFile,
+		Board:    board,
+		Content:  encoded,
+		MimeType: mimeType,
+		Filename: filepath.Base(file),
+	})
+}
 
-	sling.MimeType = finalMime
-	sling.Content = []byte(data)
-
-	jsonData, err := json.Marshal(sling)
+func (c *Client) sendCommand(command commands.CommandRequest) error {
+	payload, err := json.Marshal(command)
 	if err != nil {
-		return fmt.Errorf("failed to marshal message: %w", err)
+		return fmt.Errorf("failed to marshal command: %w", err)
 	}
 
-	err = c.nc.Publish(subject, jsonData)
+	request, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/commands", bytes.NewReader(payload))
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to build request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json")
+
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return fmt.Errorf("failed to send command: %w", err)
+	}
+	defer response.Body.Close()
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("command failed: %s", strings.TrimSpace(string(body)))
 	}
 
-	// Ensure message is actually sent
-	err = c.nc.Flush()
-	if err != nil {
-		return fmt.Errorf("failed to flush message: %w", err)
+	if len(body) == 0 {
+		return nil
+	}
+
+	var commandResponse commands.CommandResponse
+	if err := json.Unmarshal(body, &commandResponse); err != nil {
+		return fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if strings.EqualFold(commandResponse.Status, "error") {
+		return fmt.Errorf("command error: %s", commandResponse.Message)
 	}
 
 	return nil
+}
+
+func detectMimeType(filename string, data []byte) string {
+	peekSize := min(len(data), 512)
+	mimeType := http.DetectContentType(data[:peekSize])
+	if isTextMime(mimeType) {
+		if ext := filepath.Ext(filename); ext != "" {
+			if fromExt := mime.TypeByExtension(ext); fromExt != "" {
+				return fromExt
+			}
+		}
+	}
+	return mimeType
+}
+
+func min(a int, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func isTextMime(mimeType string) bool {
-	return len(mimeType) >= 5 && mimeType[:5] == "text/"
+	return strings.HasPrefix(mimeType, "text/")
 }

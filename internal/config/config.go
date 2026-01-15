@@ -9,6 +9,7 @@ import (
 
 // Config defines the structure of the configuration file
 type Config struct {
+	ServerHost      string `mapstructure:"server_host,omitempty"`
 	ServerPort      string `mapstructure:"server_port,omitempty"`
 	NATSURL         string `mapstructure:"nats_url,omitempty"`
 	NATSCredentials string `mapstructure:"nats_credentials,omitempty"`
