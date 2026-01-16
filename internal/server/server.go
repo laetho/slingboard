@@ -29,6 +29,7 @@ import (
 	"github.com/laetho/slingboard/templates"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nuid"
+	"github.com/spf13/viper"
 	"github.com/yuin/goldmark"
 )
 
@@ -36,13 +37,7 @@ const (
 	defaultBoard           = "global"
 	commandSubjectPrefix   = "slingboard."
 	streamPrefix           = "sb_"
-	hostName               = "localhost"
-	indexSubject           = "h8s.http.GET.localhost"
-	boardSubjectPrefix     = "h8s.http.GET.localhost.board."
-	boardSubjectWildcard   = "h8s.http.GET.localhost.board.*"
-	commandsSubject        = "h8s.http.POST.localhost.api.commands"
-	styleSubject           = "h8s.http.GET.localhost.static.style%2Ecss"
-	websocketSubjectPrefix = "h8s.ws.ws.localhost.board."
+	defaultFQDN            = "localhost"
 	websocketEstablished   = "h8s.control.ws.conn.established"
 	websocketClosed        = "h8s.control.ws.conn.closed"
 	websocketPublishHeader = "X-H8s-PublishSubject"
@@ -51,6 +46,16 @@ const (
 	contentTypeJSON        = "application/json"
 	contentTypeCSS         = "text/css; charset=utf-8"
 	markdownMimeType       = "text/markdown"
+)
+
+var (
+	indexSubject           = ""
+	boardSubjectPrefix     = ""
+	boardSubjectWildcard   = ""
+	commandsSubject        = ""
+	styleSubject           = ""
+	websocketSubjectPrefix = ""
+	configuredFQDN         = ""
 )
 
 var markdownRenderer = goldmark.New()
@@ -106,6 +111,33 @@ func (s *service) register() error {
 		return err
 	}
 	return nil
+}
+
+func reversedFQDN(fqdn string) string {
+	trimmed := strings.TrimSpace(fqdn)
+	if trimmed == "" {
+		return defaultFQDN
+	}
+	parts := strings.Split(trimmed, ".")
+	for left, right := 0, len(parts)-1; left < right; left, right = left+1, right-1 {
+		parts[left], parts[right] = parts[right], parts[left]
+	}
+	return strings.Join(parts, ".")
+}
+
+func configureSubjects() {
+	fqdn := viper.GetString("fqdn")
+	if fqdn == "" {
+		fqdn = defaultFQDN
+	}
+	configuredFQDN = fqdn
+	reversed := strings.ToLower(reversedFQDN(fqdn))
+	indexSubject = fmt.Sprintf("h8s.http.get.%s", reversed)
+	boardSubjectPrefix = fmt.Sprintf("h8s.http.get.%s.board.", reversed)
+	boardSubjectWildcard = fmt.Sprintf("h8s.http.get.%s.board.*", reversed)
+	commandsSubject = fmt.Sprintf("h8s.http.post.%s.api.commands", reversed)
+	styleSubject = fmt.Sprintf("h8s.http.get.%s.static.style%%2Ecss", reversed)
+	websocketSubjectPrefix = fmt.Sprintf("h8s.ws.ws.%s.board.", reversed)
 }
 
 func (s *service) queueSubscribe(subject string, handler nats.MsgHandler) error {
@@ -172,13 +204,14 @@ func Start() {
 		log.Fatalf("Error creating JetStream context: %v", err)
 	}
 
+	configureSubjects()
 	svc := newService(nc, js)
 	svc.cleanupWebsocketConsumers()
 	if err := svc.register(); err != nil {
 		log.Fatalf("Error registering subscriptions: %v", err)
 	}
 
-	log.Printf("Sling Board NATS service started for host %s", hostName)
+	log.Printf("Sling Board NATS service started for host %s", configuredFQDN)
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)

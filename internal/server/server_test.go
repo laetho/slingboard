@@ -43,6 +43,14 @@ func startService(t *testing.T, nc *nats.Conn) *service {
 		t.Fatalf("failed to create JetStream context: %v", err)
 	}
 
+	configureSubjects()
+	indexSubject = strings.ToUpper(indexSubject)
+	boardSubjectPrefix = strings.ToUpper(boardSubjectPrefix)
+	boardSubjectWildcard = strings.ToUpper(boardSubjectWildcard)
+	commandsSubject = strings.ToUpper(commandsSubject)
+	styleSubject = strings.ToUpper(styleSubject)
+	websocketSubjectPrefix = strings.ToUpper(websocketSubjectPrefix)
+
 	svc := newService(nc, js)
 	if err := svc.register(); err != nil {
 		t.Fatalf("failed to register service: %v", err)
