@@ -10,6 +10,7 @@ import (
 )
 
 var serveNatsURL string
+var serveNatsCreds string
 
 var serveCmd = &cobra.Command{
 	Use:   "serve",
@@ -18,6 +19,9 @@ var serveCmd = &cobra.Command{
 		if serveNatsURL != "" {
 			viper.Set("nats_url", serveNatsURL)
 		}
+		if serveNatsCreds != "" {
+			viper.Set("nats_credentials", serveNatsCreds)
+		}
 		fmt.Println("Starting Sling Board server...")
 		server.Start()
 	},
@@ -25,5 +29,7 @@ var serveCmd = &cobra.Command{
 
 func init() {
 	serveCmd.Flags().StringVar(&serveNatsURL, "nats-url", "", "NATS server URL")
+	serveCmd.Flags().StringVar(&serveNatsCreds, "nats-creds", "", "NATS credentials file")
+	serveCmd.Flags().StringVar(&serveNatsCreds, "nats-credentials", "", "NATS credentials file")
 	rootCmd.AddCommand(serveCmd)
 }

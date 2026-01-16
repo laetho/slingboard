@@ -10,7 +10,7 @@ services:
     build:
       context: ../..
       dockerfile: examples/all-in-one-local/Dockerfile
-    command: ["serve"]
+    command: ["serve", "--nats-url=nats://nats:4222"]
     depends_on:
       - nats
     volumes:

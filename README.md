@@ -61,10 +61,10 @@ Board management commands:
 ./sling --api-url http://localhost:8080 board create team-a
 ```
 
-Serve with an explicit NATS URL:
+Serve with explicit NATS connection settings:
 
 ```
-./sling serve --nats-url nats://localhost:4222
+./sling serve --nats-url nats://localhost:4222 --nats-creds /path/to/creds
 ```
 
 ## Tests
