@@ -171,6 +171,11 @@ templ BoardView(board string) {
         <p class="text-sm uppercase tracking-[0.2em] text-slate-400"><a href="/" class="hover:text-slate-200">slingBoard</a></p>
         <h1 class="text-2xl font-semibold">{ board }</h1>
       </div>
+      <div class="user-pill" id="user-pill">
+        <span class="user-pill__label">You:</span>
+        <span id="current-user-name"></span>
+        <button type="button" id="user-regenerate" class="user-pill__action" aria-label="Regenerate username">↻</button>
+      </div>
       <div class="flex items-center gap-3">
         <a href="/" class="rounded-full border border-slate-700/60 bg-slate-900/80 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-300">All slingBoards</a>
         <button id="grid-toggle" class="rounded-full border border-slate-700/60 bg-slate-900/80 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-300">Grid view</button>
@@ -248,7 +253,30 @@ templ BoardView(board string) {
       const messageInput = document.getElementById("sling-message");
       const urlInput = document.getElementById("sling-url");
       const fileInput = document.getElementById("sling-file");
+      const userName = document.getElementById("current-user-name");
+      const userRegenerate = document.getElementById("user-regenerate");
       let activeTab = "text";
+
+      const adjectives = ["brave", "calm", "curious", "eager", "gentle", "kind", "lively", "mellow", "quiet", "witty"];
+      const animals = ["otter", "fox", "hawk", "panda", "tiger", "koala", "owl", "whale", "lynx", "swift"];
+
+      const generateUser = () => {
+        const adjective = adjectives[Math.floor(Math.random() * adjectives.length)];
+        const animal = animals[Math.floor(Math.random() * animals.length)];
+        return `${adjective}-${animal}`;
+      };
+
+      const getLocalUser = () => {
+        const stored = window.localStorage.getItem("sling_user");
+        if (stored) {
+          return stored;
+        }
+        const generated = generateUser();
+        window.localStorage.setItem("sling_user", generated);
+        return generated;
+      };
+
+      let localUser = getLocalUser();
 
       if (!container || !slings) {
         return;
@@ -307,6 +335,12 @@ templ BoardView(board string) {
         status.classList.toggle("is-error", isError);
       };
 
+      const setUserBadge = () => {
+        if (userName) {
+          userName.textContent = localUser;
+        }
+      };
+
       const openModal = () => {
         modal?.classList.add("is-open");
         modal?.setAttribute("aria-hidden", "false");
@@ -352,7 +386,7 @@ templ BoardView(board string) {
           return;
         }
 
-        let payload = { type: activeTab, board: board, content: "" };
+        let payload = { type: activeTab, board: board, author: localUser, content: "" };
 
         try {
           if (activeTab === "text") {
@@ -379,6 +413,7 @@ templ BoardView(board string) {
             payload = {
               type: "file",
               board: board,
+              author: localUser,
               content: encoded,
               filename: file.name,
               mime_type: file.type || "application/octet-stream",
@@ -404,58 +439,83 @@ templ BoardView(board string) {
         }
       };
 
+      setUserBadge();
+
       addButton?.addEventListener("click", openModal);
       modalClose.forEach((button) => button.addEventListener("click", closeModal));
       tabs.forEach((tab) => tab.addEventListener("click", () => setActiveTab(tab.dataset.tab)));
       form?.addEventListener("submit", submitSling);
+      userRegenerate?.addEventListener("click", () => {
+        localUser = generateUser();
+        window.localStorage.setItem("sling_user", localUser);
+        setUserBadge();
+      });
       window.addEventListener("keydown", (event) => {
         if (event.key === "Escape") {
           closeModal();
         }
       });
 
-      const formatTimestamp = (element) => {
-        if (!element) {
-          return;
-        }
-        const iso = element.dataset.timestamp;
-        if (!iso) {
-          return;
-        }
-        const date = new Date(iso);
-        if (Number.isNaN(date.getTime())) {
-          return;
-        }
-        const parts = new Intl.DateTimeFormat(undefined, {
-          year: "numeric",
-          month: "2-digit",
-          day: "2-digit",
-          hour: "2-digit",
-          minute: "2-digit",
-          timeZoneName: "short",
-        }).formatToParts(date);
-        const lookup = (type) => parts.find((part) => part.type === type)?.value || "";
-        const timestamp =
-          lookup("year") +
-          "-" +
-          lookup("month") +
-          "-" +
-          lookup("day") +
-          " " +
-          lookup("hour") +
-          ":" +
-          lookup("minute") +
-          " " +
-          lookup("timeZoneName");
-        element.textContent = timestamp.trim();
+      const formatTimestamps = (root = document) => {
+        const timestamps = root.querySelectorAll("[data-timestamp]");
+        timestamps.forEach((element) => {
+          const value = element.dataset.timestamp;
+          if (!value) {
+            return;
+          }
+          const date = new Date(value);
+          if (Number.isNaN(date.getTime())) {
+            element.textContent = value;
+            return;
+          }
+          element.textContent = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        });
       };
 
-      const formatTimestamps = (scope) => {
-        const targets = (scope || document).querySelectorAll(".sling-meta[data-timestamp]");
-        targets.forEach((target) => formatTimestamp(target));
+      const focusSling = (sling) => {
+        if (!sling) {
+          return;
+        }
+        formatTimestamps(sling);
+        sling.classList.add("sling--focus");
+        window.setTimeout(() => sling.classList.remove("sling--focus"), 2000);
+        sling.scrollIntoView({ behavior: "smooth", block: "start" });
       };
 
-      formatTimestamps(document);
+      const focusNewestSling = () => {
+        if (isGridMode) {
+          return;
+        }
+        const placeholder = slings.querySelector("#sling-placeholder");
+        placeholder?.remove();
+        const firstSling = slings.querySelector(".sling");
+        if (!firstSling) {
+          return;
+        }
+        focusSling(firstSling);
+        trimSlings();
+      };
+
+      let focusPending = false;
+      const scheduleFocusNewestSling = () => {
+        if (isGridMode || focusPending) {
+          return;
+        }
+        focusPending = true;
+        window.requestAnimationFrame(() => {
+          focusPending = false;
+          focusNewestSling();
+        });
+      };
+
+      const slingObserver = new MutationObserver((mutations) => {
+        const hasNewSling = mutations.some((mutation) => mutation.addedNodes.length > 0);
+        if (hasNewSling) {
+          scheduleFocusNewestSling();
+        }
+      });
+
+      slingObserver.observe(slings, { childList: true, subtree: true });
 
       ws.addEventListener("message", (event) => {
         const html = event.data;
@@ -473,20 +533,9 @@ templ BoardView(board string) {
           }),
         );
 
-        trimSlings();
-
-        const firstSling = slings.firstElementChild;
-        if (firstSling) {
-          formatTimestamps(firstSling);
-          firstSling.classList.add("sling--focus");
-          firstSling.focus({ preventScroll: true });
-          window.setTimeout(() => firstSling.classList.remove("sling--focus"), 2000);
-        }
-
-        if (!isGridMode && !isUserScrolling && firstSling) {
-          firstSling.scrollIntoView({ behavior: "smooth", block: "start" });
-        }
+        scheduleFocusNewestSling();
       });
+
     });
   </script>
 </body>

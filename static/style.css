@@ -36,6 +36,10 @@ body {
   box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.4), 0 35px 120px rgba(15, 23, 42, 0.45);
 }
 
+.sling--focus .sling-card__content--message {
+  text-align: center;
+}
+
 .scroll-container.grid-mode {
   scroll-snap-type: none;
 }
@@ -82,10 +86,27 @@ body {
   scrollbar-color: rgba(148, 163, 184, 0.4) transparent;
 }
 
+.sling-author {
+  position: absolute;
+  left: 2.25rem;
+  top: 0;
+  transform: translateY(-50%);
+  padding: 0.35rem 0.9rem;
+  border-radius: 999px;
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  background: rgba(30, 41, 59, 0.9);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #fbbf24;
+  z-index: 1;
+}
+
 .sling-meta {
   position: absolute;
   right: 2.25rem;
-  bottom: -0.9rem;
+  bottom: 0;
+  transform: translateY(50%);
   padding: 0.35rem 0.9rem;
   border-radius: 999px;
   border: 1px solid rgba(148, 163, 184, 0.35);
@@ -94,6 +115,7 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.12em;
   color: #94a3b8;
+  z-index: 1;
 }
 
 .sling-card__content::-webkit-scrollbar {
@@ -115,6 +137,39 @@ body {
   height: 60vh;
   border-radius: 1.25rem;
   object-fit: contain;
+}
+
+.user-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 1rem;
+  border-radius: 999px;
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  background: rgba(15, 23, 42, 0.7);
+  color: #fbbf24;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+}
+
+.user-pill__label {
+  color: #e2e8f0;
+  font-weight: 600;
+}
+
+.user-pill__action {
+  border: none;
+  background: transparent;
+  color: #fbbf24;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+@media (max-width: 900px) {
+  .user-pill {
+    display: none;
+  }
 }
 
 .floating-action {

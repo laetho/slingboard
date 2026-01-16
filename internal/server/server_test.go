@@ -274,6 +274,7 @@ func TestWebsocketBroadcast(t *testing.T) {
 func TestMarkdownRender(t *testing.T) {
 	sling := slingmessage.SlingMessage{
 		MimeType: markdownMimeType,
+		Sender:   "tester",
 		Content:  []byte("# Title\n\nSome text"),
 	}
 

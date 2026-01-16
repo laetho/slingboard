@@ -11,11 +11,14 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/alecthomas/chroma/quick"
@@ -123,6 +126,24 @@ func (s *service) subscribe(subject string, handler nats.MsgHandler) error {
 	return nil
 }
 
+func (s *service) cleanupWebsocketConsumers() {
+	for streamName := range s.js.StreamNames() {
+		if !strings.HasPrefix(streamName, streamPrefix) {
+			continue
+		}
+		for consumerName := range s.js.ConsumerNames(streamName) {
+			if !strings.HasPrefix(consumerName, "ws-") {
+				continue
+			}
+			if err := s.js.DeleteConsumer(streamName, consumerName); err != nil {
+				log.Printf("Failed to delete websocket consumer %s for stream %s: %v", consumerName, streamName, err)
+				continue
+			}
+			log.Printf("Deleted websocket consumer %s for stream %s", consumerName, streamName)
+		}
+	}
+}
+
 func (s *service) shutdown() {
 	for _, sub := range s.subs {
 		_ = sub.Unsubscribe()
@@ -152,12 +173,22 @@ func Start() {
 	}
 
 	svc := newService(nc, js)
+	svc.cleanupWebsocketConsumers()
 	if err := svc.register(); err != nil {
 		log.Fatalf("Error registering subscriptions: %v", err)
 	}
 
 	log.Printf("Sling Board NATS service started for host %s", hostName)
-	select {}
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	<-sigChan
+	log.Printf("Shutting down Sling Board NATS service")
+	svc.shutdown()
+	if err := nc.Drain(); err != nil {
+		log.Printf("Failed to drain NATS connection: %v", err)
+	}
+	nc.Close()
 }
 
 func (s *service) handleIndex(msg *nats.Msg) {
@@ -297,6 +328,10 @@ func (s *service) handleCommands(msg *nats.Msg) {
 	if board == "" {
 		board = defaultBoard
 	}
+	author := strings.TrimSpace(request.Author)
+	if author == "" {
+		author = "anonymous"
+	}
 
 	if _, err := s.ensureBoardStream(board); err != nil {
 		s.respondCommandError(msg, http.StatusInternalServerError, "failed to ensure board stream")
@@ -305,6 +340,7 @@ func (s *service) handleCommands(msg *nats.Msg) {
 
 	sling := slingmessage.SlingMessage{
 		ID:        id,
+		Sender:    author,
 		Timestamp: timestamp,
 		MimeType:  mimeType,
 		Content:   payload,
@@ -534,10 +570,12 @@ func renderSling(sling *slingmessage.SlingMessage) (string, error) {
 	case strings.HasPrefix(sling.MimeType, "image/"):
 		component := templates.SlingImage(
 			id,
+			sling.Sender,
 			timestampLabel,
 			fmt.Sprintf(
 				"data:%s;base64,%s", sling.MimeType, base64.RawStdEncoding.EncodeToString(sling.Content)),
 		)
+
 		if err := component.Render(context.Background(), &buf); err != nil {
 			return "", err
 		}
@@ -547,13 +585,13 @@ func renderSling(sling *slingmessage.SlingMessage) (string, error) {
 		if err := quick.Highlight(&buffer, string(sling.Content), "go", "html", "monokai"); err != nil {
 			return "", err
 		}
-		component := templates.SlingCode(id, timestampLabel, buffer.String())
+		component := templates.SlingCode(id, sling.Sender, timestampLabel, buffer.String())
 		if err := component.Render(context.Background(), &buf); err != nil {
 			return "", err
 		}
 
 	case strings.HasPrefix(sling.MimeType, "text/x-uri"):
-		component := templates.SlingURL(id, timestampLabel, string(sling.Content))
+		component := templates.SlingURL(id, sling.Sender, timestampLabel, string(sling.Content))
 		if err := component.Render(context.Background(), &buf); err != nil {
 			return "", err
 		}
@@ -563,13 +601,13 @@ func renderSling(sling *slingmessage.SlingMessage) (string, error) {
 		if err := markdownRenderer.Convert(sling.Content, &mdBuffer); err != nil {
 			return "", err
 		}
-		component := templates.SlingMarkdown(id, timestampLabel, mdBuffer.String())
+		component := templates.SlingMarkdown(id, sling.Sender, timestampLabel, mdBuffer.String())
 		if err := component.Render(context.Background(), &buf); err != nil {
 			return "", err
 		}
 
 	case strings.HasPrefix(sling.MimeType, "text/"):
-		component := templates.Sling(id, timestampLabel, string(sling.Content))
+		component := templates.Sling(id, sling.Sender, timestampLabel, string(sling.Content))
 		if err := component.Render(context.Background(), &buf); err != nil {
 			return "", err
 		}

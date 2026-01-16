@@ -15,6 +15,7 @@ const (
 type CommandRequest struct {
 	Type     CommandType `json:"type"`
 	Board    string      `json:"board,omitempty"`
+	Author   string      `json:"author,omitempty"`
 	Content  string      `json:"content"`
 	MimeType string      `json:"mime_type,omitempty"`
 	Filename string      `json:"filename,omitempty"`
